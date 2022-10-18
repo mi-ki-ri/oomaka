@@ -1,70 +1,83 @@
-import datetime
-import pprint
-import random
+import os
+from flask import Flask, render_template, redirect, request, session, make_response, session, redirect
+import requests
 import spotipy
-from spotipy.oauth2 import SpotifyOAuth
+
+from main import main
+
+# Authentication Steps, paramaters, and responses are defined at https://developer.spotify.com/web-api/authorization-guide/
+# Visit this url to see all the steps, parameters, and expected response.
 
 
-def main():
-    scopes = ["playlist-modify-private", "user-top-read"]
+app = Flask(__name__)
+app.secret_key = "app_sec_key2"
 
-    minutes_25 = 1500000
-    minutes_5 = 300000
-    minutes_half = 30000
+API_BASE = 'https://accounts.spotify.com'
 
-    sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scopes))
-    user_id = sp.me()['id']
+#  Client Keys
+CLIENT_ID = os.environ['SPOTIPY_CLIENT_ID']
+CLIENT_SECRET = os.environ['SPOTIPY_CLIENT_SECRET']
 
-    artist_ids = []
-
-    print("**seed_artists**")
-    top_artists_1 = sp.current_user_top_artists(
-        limit=3, time_range="short_term")
-    for artist in top_artists_1["items"]:
-        pprint.pprint(artist["name"])
-        artist_ids.append(artist["id"])
-
-    top_artists_2 = sp.current_user_top_artists(
-        limit=1, time_range="medium_term")
-    for artist in top_artists_2["items"]:
-        pprint.pprint(artist["name"])
-        artist_ids.append(artist["id"])
-
-    top_artists_3 = sp.current_user_top_artists(
-        limit=1, time_range="long_term")
-    for artist in top_artists_3["items"]:
-        pprint.pprint(artist["name"])
-        artist_ids.append(artist["id"])
-
-    recommends_upper = sp.recommendations(
-        seed_artists=artist_ids, country="jp", limit=100, min_tempo=100, max_duration_ms=(minutes_5+minutes_half))
-
-    recommends_slower = sp.recommendations(
-        seed_artists=artist_ids, country="jp", limit=1, max_tempo=99, max_duration_ms=(minutes_5 + minutes_half), min_duration_ms=(minutes_5 - minutes_half))
-
-    current_tracks = []
-    current_seconds = 0
-
-    while current_seconds <= (minutes_25 - minutes_half):
-        choiced = random.choice(recommends_upper["tracks"])
-        # pprint.pprint(choiced["name"])
-        current_seconds += choiced["duration_ms"]
-        current_tracks.append(choiced["id"])
-
-    current_tracks.append(recommends_slower["tracks"][0]["id"])
-
-    dt_now = datetime.datetime.now()
-    timestr = dt_now.strftime('%Y-%m-%d %H:%M:%S')
-    playlist = sp.user_playlist_create(
-        user_id, name=f"Pomodoro Session @{timestr}", public=False, collaborative=False, description=f"")
-
-    playlist_id = playlist["id"]
-
-    for current_track in current_tracks:
-
-        sp.playlist_add_items(
-            playlist_id=playlist_id, items=[current_track])
+# Spotify URLS
+SPOTIFY_AUTH_URL = "https://accounts.spotify.com/authorize"
+SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_API_BASE_URL = "https://api.spotify.com"
+API_VERSION = "v1"
+SPOTIFY_API_URL = "{}/{}".format(SPOTIFY_API_BASE_URL, API_VERSION)
+# authorization-code-flow Step 1. Have your application request authorization;
+# the user logs in and authorizes access
+SCOPE = "playlist-modify-private,user-top-read"
+REDIRECT_URI = "http://127.0.0.1:5000/api_callback"
 
 
-if __name__ == '__main__':
-    main()
+@app.route("/")
+def verify():
+    session.clear()
+
+    auth_url = f'{API_BASE}/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={REDIRECT_URI}&scope={SCOPE}'
+    print(auth_url)
+    return redirect(auth_url)
+
+
+@app.route("/index")
+def index():
+    return render_template("index.html")
+
+# authorization-code-flow Step 2.
+# Have your application request refresh and access tokens;
+# Spotify returns access and refresh tokens
+
+
+@app.route("/api_callback")
+def api_callback():
+    session.clear()
+    code = request.args.get('code')
+
+    auth_token_url = f"{API_BASE}/api/token"
+    res = requests.post(auth_token_url, data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": REDIRECT_URI,
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET
+    })
+
+    res_body = res.json()
+    print(res.json())
+    session["toke"] = res_body.get("access_token")
+
+    return redirect("index")
+
+
+# authorization-code-flow Step 3.
+# Use the access token to access the Spotify Web API;
+# Spotify returns requested data
+@app.route("/gen", methods=['GET'])
+def gen():
+    sp = spotipy.Spotify(auth=session['toke'])
+    main(sp=sp)
+    return render_template("gen.html")
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
